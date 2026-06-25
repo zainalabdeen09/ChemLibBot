@@ -1,8 +1,12 @@
 import logging
+import os
+from functools import partial
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -413,11 +417,29 @@ async def cancel_add_paper(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def on_startup(bot: Bot, base_url: str):
+    await bot.set_webhook(f"{base_url}/webhook")
+
+
+async def on_shutdown(bot: Bot):
+    await bot.delete_webhook()
+
+
 async def start_bot():
     init_db()
     _load_sections()
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
-    logging.info("ChemLibBot started!")
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    if webhook_url:
+        dp.startup.register(partial(on_startup, base_url=webhook_url))
+        dp.shutdown.register(on_shutdown)
+        app = web.Application()
+        webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+        webhook_requests_handler.register(app, path="/webhook")
+        setup_application(app, dp, bot=bot)
+        app.router.add_get("/", lambda r: web.Response(text="OK"))
+        return app
+    logging.info("ChemLibBot started (polling)!")
     await dp.start_polling(bot)
