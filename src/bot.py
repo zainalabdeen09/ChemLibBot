@@ -425,21 +425,48 @@ async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
 
 
-async def start_bot():
+async def async_health_server():
+    app = web.Application()
+    app.router.add_get("/", lambda r: web.Response(text="OK"))
+    port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Health server on port {port}")
+
+
+def create_bot_and_dp():
     init_db()
     _load_sections()
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
+    return bot, dp
+
+
+async def start_bot_webhook():
     webhook_url = os.environ.get("WEBHOOK_URL")
-    if webhook_url:
-        dp.startup.register(partial(on_startup, base_url=webhook_url))
-        dp.shutdown.register(on_shutdown)
-        app = web.Application()
-        webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-        webhook_requests_handler.register(app, path="/webhook")
-        setup_application(app, dp, bot=bot)
-        app.router.add_get("/", lambda r: web.Response(text="OK"))
-        return app
+    if not webhook_url:
+        return None
+    bot, dp = create_bot_and_dp()
+    dp.startup.register(partial(on_startup, base_url=webhook_url))
+    dp.shutdown.register(on_shutdown)
+    app = web.Application()
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_requests_handler.register(app, path="/webhook")
+    setup_application(app, dp, bot=bot)
+    app.router.add_get("/", lambda r: web.Response(text="OK"))
+    return app
+
+
+async def start_bot():
+    webhook_app = await start_bot_webhook()
+    if webhook_app:
+        port = int(os.environ.get("PORT", 8080))
+        await web.run_app(webhook_app, host="0.0.0.0", port=port)
+        return
+    await async_health_server()
+    bot, dp = create_bot_and_dp()
     logging.info("ChemLibBot started (polling)!")
     await dp.start_polling(bot)
