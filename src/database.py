@@ -11,6 +11,7 @@ def get_connection():
 
 
 def init_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = get_connection()
     cursor = conn.cursor()
 
